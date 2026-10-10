@@ -1,0 +1,74 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+.pytest_cache/
+htmlcov/
+
+# Next.js
+.next/
+out/
+build/
+dist/
+
+# Production
+*.local
+
+# Misc
+.DS_Store
+*.pem
+.env
+.env*.local
+.vscode/
+.idea/
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Storage (output videos, uploads, cache)
+api/storage/outputs/*
+api/storage/cache/*
+api/storage/upload/*
+!api/storage/outputs/.gitkeep
+!api/storage/cache/.gitkeep
+!api/storage/upload/.gitkeep
+
+# FFmpeg / temp files
+*.mp4
+*.mp3
+*.wav
+*.ass
+*.srt
+*.txt.tmp
+
+# Models (whisper, etc.)
+api/models/
+
+# Logs
+*.log
+logs/
+
+# Claude / agent files
+.claude/
+.automation/

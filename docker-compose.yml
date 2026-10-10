@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  api:
+    build: ./api
+    container_name: vidiforge-api
+    ports:
+      - "8080:8080"
+    environment:
+      - VIDIFORGE_API_TOKEN=${VIDIFORGE_API_TOKEN:-devtoken123}
+      - VIDIFORGE_MASTER_KEY=${VIDIFORGE_MASTER_KEY:-}
+      - WEB_ORIGIN=${WEB_ORIGIN:-http://localhost:3000}
+      - VIDIFORGE_ENV=development
+    volumes:
+      - ./api/storage:/app/storage
+    restart: unless-stopped
+
+  web:
+    build: ./web
+    container_name: vidiforge-web
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8080
+      - INTERNAL_API_TOKEN=${VIDIFORGE_API_TOKEN:-devtoken123}
+    depends_on:
+      - api
+    restart: unless-stopped
