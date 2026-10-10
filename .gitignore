@@ -71,4 +71,7 @@ logs/
 
 # Claude / agent files
 .claude/
-.automation/api/static/
+.automation/
+
+# Built static frontend (created at Docker build time)
+api/static/
