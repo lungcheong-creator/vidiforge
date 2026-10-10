@@ -7,7 +7,7 @@ Background tasks update it; HTTP handlers read it.
 from __future__ import annotations
 
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlmodel import Session
@@ -32,7 +32,7 @@ class TaskState:
             return s.get(Task, self.task_id)
 
     def _save(self, **fields: Any) -> None:
-        fields["updated_at"] = datetime.utcnow()
+        fields["updated_at"] = datetime.now(timezone.utc)
         with session_scope() as s:
             task = s.get(Task, self.task_id)
             if not task:

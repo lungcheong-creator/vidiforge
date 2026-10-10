@@ -9,7 +9,7 @@ import asyncio
 import json
 import shutil
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -31,6 +31,10 @@ STAGES = [
     ("bgm", 70, 75),
     ("render", 75, 100),
 ]
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 async def run_pipeline(task_id: str, request: VideoRequest) -> None:
@@ -187,7 +191,7 @@ async def create_task(request: VideoRequest) -> VideoTask:
     """Create a new task row and return its representation."""
     task_id = uuid.uuid4().hex
     config_json = request.model_dump_json()
-    now = datetime.utcnow()
+    now = _utcnow()
 
     with session_scope() as s:
         task = Task(

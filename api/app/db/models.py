@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class Task(SQLModel, table=True):
@@ -24,8 +28,8 @@ class Task(SQLModel, table=True):
     file_size: Optional[int] = None
     config_json: str  # full request snapshot
     error: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
 
 
 class ApiKey(SQLModel, table=True):
@@ -33,7 +37,7 @@ class ApiKey(SQLModel, table=True):
 
     provider: str = Field(primary_key=True)
     ciphertext: bytes
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
 
 
 class Project(SQLModel, table=True):
@@ -42,7 +46,7 @@ class Project(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str
     description: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 class Asset(SQLModel, table=True):
@@ -53,4 +57,4 @@ class Asset(SQLModel, table=True):
     kind: str  # "video" | "image" | "audio"
     path: str
     meta_json: str = "{}"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utcnow)
