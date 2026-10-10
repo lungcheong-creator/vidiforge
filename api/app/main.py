@@ -95,6 +95,16 @@ async def healthz() -> HealthResponse:
     )
 
 
+@app.get("/api/health", response_model=HealthResponse, tags=["meta"])
+async def api_health() -> HealthResponse:
+    """Health endpoint under /api/ to bypass the SPA catch-all."""
+    return HealthResponse(
+        ok=True,
+        env=settings.vidiforge_env,
+        ffmpeg=settings.ffmpeg_path,
+    )
+
+
 @app.get("/api", tags=["meta"])
 async def root() -> dict:
     return {
