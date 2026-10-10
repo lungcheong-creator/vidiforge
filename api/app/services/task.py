@@ -246,7 +246,6 @@ async def get_task(task_id: str) -> VideoTask:
         output_url = None
         if task.output_path:
             output_url = f"/api/v1/stream/{task.output_path}"
-
         return VideoTask(
             id=task.id,
             topic=task.topic,
