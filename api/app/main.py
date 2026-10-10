@@ -110,9 +110,12 @@ if STATIC_DIR.exists():
 
     @app.get("/{path:path}", include_in_schema=False)
     async def serve_spa(path: str):
-        # API routes handled above; this is the SPA fallback
-        if path.startswith("api/") or path.startswith("docs") or path.startswith("redoc"):
-            return None  # let FastAPI return 404
+        # Don't intercept API or health endpoints — they have their own routes
+        # mounted earlier, but the order may be such that this catch-all matches first.
+        # So explicitly return 404 for any reserved prefix.
+        if path.startswith("api/") or path.startswith("docs") or path.startswith("redoc") or path == "healthz" or path.startswith("openapi"):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Not Found")
         # Try to serve the actual static file first
         file_path = STATIC_DIR / path
         if file_path.is_file():
