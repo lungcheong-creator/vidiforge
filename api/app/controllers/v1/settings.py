@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -44,7 +44,7 @@ async def save_key(body: ApiKeySave, _: VerifiedToken) -> ApiKeyEntry:
         raise HTTPException(status_code=400, detail="Value cannot be empty")
 
     ciphertext = security.encrypt(body.value)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     with session_scope() as s:
         existing = s.get(ApiKey, body.provider)
         if existing:
