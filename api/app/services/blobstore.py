@@ -90,21 +90,41 @@ def get_bytes(key: str) -> bytes | None:
     return target.read_bytes() if target.is_file() else None
 
 
+def delete_object(key: str) -> bool:
+    """Delete a single object. Returns True when something was removed."""
+    removed = False
+    if enabled():
+        blob = _bucket().blob(key)
+        if blob.exists():
+            blob.delete()
+            removed = True
+    else:
+        target = _local_root() / key
+        if target.is_file():
+            target.unlink()
+            removed = True
+    _cache.pop(key, None)
+    return removed
+
+
 def delete_prefix(prefix: str) -> int:
-    """Delete every object under `prefix`. Returns the number removed."""
+    """Delete every object under `prefix` (a folder path). Returns the count."""
     removed = 0
     if enabled():
         for blob in _get_client().list_blobs(_bucket_name(), prefix=prefix):
             blob.delete()
             removed += 1
     else:
-        target = _local_root() / prefix
+        target = _local_root() / prefix.rstrip("/")
         if target.is_dir():
             import shutil
 
-            removed = sum(1 for _ in target.rglob("*") if _.is_file())
+            removed = sum(1 for p in target.rglob("*") if p.is_file())
             shutil.rmtree(target, ignore_errors=True)
-    for k in [k for k in _cache if k.startswith(prefix)]:
+        elif target.is_file():
+            target.unlink()
+            removed = 1
+    for k in [k for k in _cache if k.startswith(prefix.rstrip("/"))]:
         _cache.pop(k, None)
     return removed
 
