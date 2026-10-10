@@ -24,6 +24,7 @@ class TaskState:
         current_stage: str | None = None,
         script: dict[str, Any] | None = None,
         output_key: str | None = None,
+        output_url: str | None = None,
         duration: float | None = None,
         file_size: int | None = None,
         error: str | None = None,
@@ -42,6 +43,8 @@ class TaskState:
             fields["script"] = script
         if output_key is not None:
             fields["output_path"] = output_key
+        if output_url is not None:
+            fields["output_url"] = output_url
         if duration is not None:
             fields["duration"] = duration
         if file_size is not None:
