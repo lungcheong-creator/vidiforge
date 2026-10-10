@@ -38,6 +38,21 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 async def lifespan(app: FastAPI):
     log.info("VidiForge starting (env=%s)", settings.vidiforge_env)
     load_toml_overrides()
+    # Cloud Run uses /tmp for writable storage; ensure it exists
+    import os
+    os.makedirs("/tmp/storage/outputs", exist_ok=True)
+    os.makedirs("/tmp/storage/cache", exist_ok=True)
+    os.makedirs("/tmp/storage/upload", exist_ok=True)
+    # Symlink /app/storage -> /tmp/storage so the app's relative paths work
+    if not os.path.exists("/app/storage"):
+        try:
+            os.symlink("/tmp/storage", "/app/storage", target_is_directory=True)
+        except FileExistsError:
+            pass
+    # Also set DATABASE_URL to /tmp for persistence across requests
+    if settings.database_url.startswith("sqlite:///./"):
+        rel = settings.database_url.replace("sqlite:///./", "")
+        os.environ["VIDIFORGE_DB_PATH"] = f"/tmp/storage/{rel}"
     settings.storage_output_dir and os.makedirs(settings.outputs_path, exist_ok=True)
     os.makedirs(settings.cache_path, exist_ok=True)
     os.makedirs(settings.upload_path, exist_ok=True)
