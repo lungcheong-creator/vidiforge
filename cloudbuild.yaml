@@ -1,0 +1,29 @@
+steps:
+  # Build the Docker image (single-stage; pre-built web/out/ already in repo)
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/vidiforge/vidiforge:latest
+      - .
+    id: build
+
+  # Push to Artifact Registry
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/vidiforge/vidiforge:latest
+    id: push
+
+images:
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/vidiforge/vidiforge:latest
+
+options:
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 50
+  logging: CLOUD_LOGGING_ONLY
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+
+timeout: 1800s
