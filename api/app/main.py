@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config.config import load_toml_overrides, settings
 from app.db.database import init_db
-from app.models.schema import HealthResponse
+from app.models.schema import HealthResponse, VoiceConfig
 from app.router import api_router
 
 
@@ -32,6 +32,9 @@ logging.basicConfig(
 log = logging.getLogger("vidiforge")
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+# Build marker — bump this on every deploy to verify which code is live.
+BUILD_ID = "2026-10-10-voice-fix-01"
 
 
 @asynccontextmanager
@@ -103,6 +106,12 @@ async def api_health() -> HealthResponse:
         env=settings.vidiforge_env,
         ffmpeg=settings.ffmpeg_path,
     )
+
+
+@app.get("/api/build-id", tags=["meta"])
+async def build_id() -> dict:
+    """Return the build marker so deploys can be verified."""
+    return {"build_id": BUILD_ID, "voice_fix": hasattr(VoiceConfig, "provider")}
 
 
 @app.get("/api", tags=["meta"])
