@@ -85,7 +85,8 @@ app.add_middleware(
 )
 
 
-@app.get("/healthz", response_model=HealthResponse, tags=["meta"])
+@app.get("/health", response_model=HealthResponse, tags=["meta"])
+@app.get("/healthz", response_model=HealthResponse, tags=["meta"], include_in_schema=False)
 async def healthz() -> HealthResponse:
     return HealthResponse(
         ok=True,
@@ -128,7 +129,7 @@ if STATIC_DIR.exists():
         # Don't intercept API or health endpoints — they have their own routes
         # mounted earlier, but the order may be such that this catch-all matches first.
         # So explicitly return 404 for any reserved prefix.
-        if path.startswith("api/") or path.startswith("docs") or path.startswith("redoc") or path == "healthz" or path.startswith("openapi"):
+        if path.startswith("api/") or path.startswith("docs") or path.startswith("redoc") or path in ("healthz", "health") or path.startswith("openapi"):
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="Not Found")
         # Try to serve the actual static file first
