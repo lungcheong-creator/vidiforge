@@ -1,187 +1,249 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useLang } from "@/lib/i18n";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Send, Sparkles, User, Bot, ChevronRight, Loader2 } from "lucide-react";
+import {
+  Send, Sparkles, ArrowRight, Loader2, AlertCircle, Wrench, Film,
+} from "lucide-react";
+import { agentChat, listAgentTools, type AgentToolCall } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+interface Turn {
+  role: "user" | "assistant";
+  content: string;
+  toolCalls?: AgentToolCall[];
+  model?: string;
+}
+
+const QUICK = {
+  zh: [
+    "建立一支關於北歐家居的 30 秒短影片",
+    "我最近做了哪些影片？",
+    "給我幾個咖啡主題的英文素材關鍵詞",
+  ],
+  en: [
+    "Make a 30s video about Nordic home decor",
+    "What videos have I made recently?",
+    "Give me English stock keywords for a coffee theme",
+  ],
+};
+
 export default function AgentPage() {
-  const { t, lang } = useLang();
-  const [messages, setMessages] = useState<Array<{ role: "user" | "agent"; text: string; tool?: string }>>([
-    { role: "agent", text: lang === "zh" ? "你好，我是 VidiForge 助手。我可以幫你生成視頻、編輯素材、翻譯腳本、批量處理。直接告訴我你想做什麼？" : "Hello. I'm VidiForge Agent. I can generate videos, edit footage, translate scripts, or batch-process. What shall we make today?", tool: "intro" },
-  ]);
+  const { lang } = useLang();
+  const router = useRouter();
+  const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
-  const [thinking, setThinking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [tools, setTools] = useState<{ name: string; description: string }[]>([]);
+  const endRef = useRef<HTMLDivElement>(null);
 
-  const quick = [
-    t("agent_quick_1"),
-    t("agent_quick_2"),
-    t("agent_quick_3"),
-  ];
+  useEffect(() => {
+    listAgentTools().then(setTools).catch(() => {});
+  }, []);
 
-  function send(text: string) {
-    if (!text.trim()) return;
-    setMessages(m => [...m, { role: "user", text }]);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [turns, busy]);
+
+  async function send(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || busy) return;
+    setError(null);
     setInput("");
-    setThinking(true);
-    setTimeout(() => {
-      setMessages(m => [...m, {
-        role: "agent",
-        text: lang === "zh"
-          ? "好的，我來幫你創建。先分析主題，然後生成 5 段腳本，從 Pexels 匹配素材，使用 Edge TTS 配音，最後渲染。整個過程大約 90 秒。"
-          : "Certainly. I'll analyze the subject, craft a 5-segment script, source footage from Pexels, voice it with Edge TTS, then render. ETA ~90s.",
-        tool: "plan",
-      }]);
-      setThinking(false);
-    }, 1200);
+
+    const next: Turn[] = [...turns, { role: "user", content: trimmed }];
+    setTurns(next);
+    setBusy(true);
+
+    try {
+      const res = await agentChat(
+        next.map((t) => ({ role: t.role, content: t.content })),
+        "deepseek-flash"
+      );
+      setTurns([
+        ...next,
+        {
+          role: "assistant",
+          content: res.reply,
+          toolCalls: res.tool_calls,
+          model: res.model,
+        },
+      ]);
+    } catch (e: any) {
+      setError(e?.message || "Agent request failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
+  const quick = QUICK[lang === "zh" ? "zh" : "en"];
+  const createdTasks = turns
+    .flatMap((t) => t.toolCalls ?? [])
+    .filter((c) => c.tool === "create_video" && (c.result as any)?.task_id)
+    .map((c) => (c.result as any).task_id as string);
+
   return (
-    <div className="mx-auto max-w-6xl px-6 py-10 lg:px-12 lg:py-14 h-full flex flex-col space-y-10">
-      {/* ========== EDITORIAL HEADER ========== */}
+    <div className="mx-auto max-w-6xl px-6 py-10 lg:px-12 lg:py-14 h-full flex flex-col space-y-8">
       <header className="animate-fade-up">
         <div className="flex items-center gap-3 text-xs uppercase tracking-[0.2em] text-muted-foreground mb-3">
           <span className="font-display italic">Concierge</span>
           <span className="h-px w-12 bg-border" />
-          <span className="tabular-nums">№ 006</span>
-          <span className="font-display italic">AI</span>
+          <span>DeepSeek V4.1 Flash</span>
         </div>
         <h1 className="font-display text-5xl font-medium tracking-tight lg:text-6xl">
           {lang === "zh" ? "與 AI" : "A Conversation"}
-          <span className="italic text-primary"> {lang === "zh" ? "對話" : "with the Atelier"}.</span>
+          <span className="italic text-primary">
+            {" "}
+            {lang === "zh" ? "對話" : "with the Atelier"}.
+          </span>
         </h1>
         <p className="font-display text-base italic text-muted-foreground mt-3 max-w-xl">
           {lang === "zh"
-            ? "用對話驅動整個創作流程。"
-            : "Drive the entire creation through conversation."}
+            ? "直接用說話的方式建影片。助手會呼叫工具完成任務。"
+            : "Talk your video into existence — the agent calls the tools for you."}
         </p>
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_320px] flex-1">
-        {/* ========== CONVERSATION ========== */}
+      <div className="grid gap-6 lg:grid-cols-[1fr_300px] flex-1">
         <Card className="flex flex-col overflow-hidden border-border/60 bg-card/40 backdrop-blur">
-          {/* Messages area */}
-          <div className="flex-1 overflow-y-auto p-8 lg:p-10 space-y-8 min-h-[500px]">
-            {messages.map((m, i) => (
+          <div className="flex-1 overflow-y-auto p-6 lg:p-8 space-y-6 min-h-[420px]">
+            {turns.length === 0 && (
+              <div className="text-center py-10">
+                <Sparkles className="h-6 w-6 text-primary mx-auto mb-3" />
+                <p className="font-display italic text-muted-foreground">
+                  {lang === "zh" ? "說一個想法，例如…" : "Start with an idea, e.g.…"}
+                </p>
+              </div>
+            )}
+
+            {turns.map((t, i) => (
               <div
                 key={i}
-                className={cn(
-                  "flex gap-5 animate-fade-up",
-                  m.role === "user" ? "flex-row-reverse" : "flex-row"
-                )}
-                style={{ animationDelay: `${i * 0.05}s` }}
+                className={cn("flex gap-4 animate-fade-up", t.role === "user" ? "flex-row-reverse" : "flex-row")}
               >
-                {m.role === "agent" ? (
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-foreground text-background font-display text-base italic">
-                    V
-                  </div>
-                ) : (
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-secondary text-foreground">
-                    <User className="h-4 w-4" />
-                  </div>
-                )}
-
-                <div className={cn("flex-1 max-w-[78%]", m.role === "user" && "flex flex-col items-end")}>
-                  <div className="flex items-baseline gap-2 mb-1.5 font-display text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
-                    <span>{m.role === "agent" ? "VidiForge" : "You"}</span>
-                    <span className="tabular-nums">{String(i + 1).padStart(2, "0")}</span>
-                    {m.tool && m.tool !== "intro" && (
-                      <Badge variant="outline" className="rounded-full text-[9px] ml-1 font-mono">
-                        {m.tool === "plan" ? "video.create" : m.tool}
-                      </Badge>
-                    )}
-                  </div>
-                  <div className={cn(
-                    "rounded-sm p-5 leading-relaxed font-display text-base",
-                    m.role === "user"
+                <div
+                  className={cn(
+                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-full font-display text-sm",
+                    t.role === "assistant"
                       ? "bg-foreground text-background italic"
-                      : "bg-background/60 border border-border/60"
-                  )}>
-                    {m.text}
+                      : "bg-secondary text-foreground"
+                  )}
+                >
+                  {t.role === "user" ? "U" : "V"}
+                </div>
+
+                <div className={cn("flex-1 max-w-[78%]", t.role === "user" && "flex flex-col items-end")}>
+                  <div className="flex items-baseline gap-2 mb-1.5 font-display text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                    <span>{t.role === "user" ? "You" : "VidiForge"}</span>
+                    {t.model && <span className="font-mono lowercase">{t.model}</span>}
                   </div>
 
-                  {/* Plan steps */}
-                  {m.tool === "plan" && (
-                    <div className="mt-4 rounded-sm border border-border/60 bg-background/40 p-5 space-y-2.5">
-                      {[
-                        { name: "subject_analysis", label: lang === "zh" ? "主題分析" : "Subject", state: "done" },
-                        { name: "script_generate", label: lang === "zh" ? "腳本生成" : "Script", state: "done" },
-                        { name: "footage_match", label: lang === "zh" ? "素材匹配" : "Footage", state: "running" },
-                        { name: "voice_over", label: lang === "zh" ? "配音" : "Voice", state: "queued" },
-                        { name: "subtitle", label: lang === "zh" ? "字幕" : "Subtitle", state: "queued" },
-                        { name: "render", label: lang === "zh" ? "渲染" : "Render", state: "queued" },
-                      ].map((s, j) => (
-                        <div key={j} className="flex items-center gap-3 text-sm font-display">
-                          {s.state === "done" && (
-                            <>
-                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                              <span className="line-through text-muted-foreground">{s.label}</span>
-                            </>
-                          )}
-                          {s.state === "running" && (
-                            <>
-                              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                              <span className="font-medium text-primary">{s.label}</span>
-                            </>
-                          )}
-                          {s.state === "queued" && (
-                            <>
-                              <span className="h-1.5 w-1.5 rounded-full bg-border" />
-                              <span className="text-muted-foreground">{s.label}</span>
-                            </>
-                          )}
-                        </div>
-                      ))}
+                  <div
+                    className={cn(
+                      "rounded-sm p-4 leading-relaxed font-display text-[15px] whitespace-pre-wrap",
+                      t.role === "user"
+                        ? "bg-foreground text-background italic"
+                        : "bg-background/60 border border-border/60"
+                    )}
+                  >
+                    {t.content}
+                  </div>
+
+                  {t.toolCalls && t.toolCalls.length > 0 && (
+                    <div className="mt-3 space-y-2 w-full">
+                      {t.toolCalls.map((c, j) => {
+                        const r = c.result as any;
+                        return (
+                          <div
+                            key={j}
+                            className="rounded-sm border border-border/60 bg-background/40 p-3 text-xs font-display"
+                          >
+                            <div className="flex items-center gap-2">
+                              {c.tool === "create_video" ? (
+                                <Film className="h-3.5 w-3.5 text-primary" />
+                              ) : (
+                                <Wrench className="h-3.5 w-3.5 text-muted-foreground" />
+                              )}
+                              <span className="font-mono text-[11px]">{c.tool}</span>
+                              {r?.task_id && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="ml-auto h-6 rounded-full px-2 text-[10px] gap-1"
+                                  onClick={() => router.push(`/workspace?task_id=${r.task_id}`)}
+                                >
+                                  {lang === "zh" ? "查看" : "Open"}
+                                  <ArrowRight className="h-3 w-3" />
+                                </Button>
+                              )}
+                            </div>
+                            <pre className="mt-1.5 whitespace-pre-wrap break-all text-muted-foreground">
+                              {JSON.stringify(r, null, 0).slice(0, 220)}
+                            </pre>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
               </div>
             ))}
 
-            {thinking && (
-              <div className="flex gap-5 animate-fade-up">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-foreground text-background font-display text-base italic">
+            {busy && (
+              <div className="flex gap-4">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background font-display text-sm italic">
                   V
                 </div>
-                <div className="rounded-sm bg-background/60 border border-border/60 px-5 py-4">
-                  <div className="flex gap-1.5">
-                    <div className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: "0ms" }} />
-                    <div className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: "150ms" }} />
-                    <div className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: "300ms" }} />
-                  </div>
+                <div className="rounded-sm bg-background/60 border border-border/60 px-4 py-3">
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
                 </div>
               </div>
             )}
+            <div ref={endRef} />
           </div>
 
-          {/* Input */}
-          <div className="border-t border-border/60 p-5 bg-background/40">
+          <div className="border-t border-border/60 p-4 bg-background/40">
+            {error && (
+              <div className="flex items-start gap-2 mb-3 rounded-sm border border-destructive/40 bg-destructive/5 p-3 text-xs">
+                <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
             <div className="flex flex-wrap gap-2 mb-3">
-              {quick.map((q, i) => (
+              {quick.map((q) => (
                 <button
-                  key={i}
+                  key={q}
                   onClick={() => send(q)}
-                  className="font-display text-xs italic rounded-full border border-border/60 bg-background/60 hover:bg-secondary/40 hover:border-primary/40 px-3.5 py-1.5 transition-all"
+                  disabled={busy}
+                  className="font-display text-xs italic rounded-full border border-border/60 bg-background/60 hover:bg-secondary/40 hover:border-primary/40 px-3 py-1.5 transition-all disabled:opacity-50"
                 >
                   {q}
                 </button>
               ))}
             </div>
-            <div className="flex gap-3">
+            <div className="flex gap-2">
               <input
                 value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && send(input)}
-                placeholder={t("agent_placeholder")}
-                className="flex-1 h-12 rounded-full border border-border/60 bg-background px-6 font-display text-sm placeholder:italic placeholder:text-muted-foreground/60 focus:outline-none focus:border-primary/50 transition-colors"
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    send(input);
+                  }
+                }}
+                placeholder={lang === "zh" ? "告訴助手你想做什麼…" : "Tell the agent what you want…"}
+                disabled={busy}
+                className="flex-1 h-11 rounded-full border border-border/60 bg-background px-5 font-display text-sm placeholder:italic placeholder:text-muted-foreground/60 focus:outline-none focus:border-primary/50 transition-colors disabled:opacity-60"
               />
               <Button
                 onClick={() => send(input)}
-                disabled={!input.trim()}
-                className="h-12 rounded-full bg-foreground text-background hover:bg-primary hover:text-primary-foreground px-6"
+                disabled={!input.trim() || busy}
+                className="h-11 rounded-full bg-foreground text-background hover:bg-primary hover:text-primary-foreground px-5"
               >
                 <Send className="h-4 w-4" />
               </Button>
@@ -189,58 +251,43 @@ export default function AgentPage() {
           </div>
         </Card>
 
-        {/* ========== SIDE PANEL ========== */}
         <div className="space-y-4">
-          <Card className="border-border/60 bg-card/40 p-6">
-            <p className="font-display text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Active Plan</p>
-            <h3 className="font-display text-xl font-medium mt-1.5">
-              {lang === "zh" ? "早晨習慣" : "Morning Routine"}
-            </h3>
-            <p className="text-sm text-muted-foreground mt-1 italic font-display">
-              {lang === "zh" ? "30 秒 · 6 段腳本" : "30s · 6 segments"}
-            </p>
-            <div className="mt-5 space-y-3">
-              <div>
-                <div className="flex justify-between text-xs font-display mb-1.5">
-                  <span className="italic text-muted-foreground">Progress</span>
-                  <span className="tabular-nums">34%</span>
-                </div>
-                <div className="h-1 rounded-full bg-secondary overflow-hidden">
-                  <div className="h-full w-1/3 bg-primary rounded-full transition-all" />
-                </div>
+          {createdTasks.length > 0 && (
+            <Card className="border-border/60 bg-card/40 p-5">
+              <p className="font-display text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                {lang === "zh" ? "本次建立" : "Created here"}
+              </p>
+              <div className="mt-3 space-y-2">
+                {createdTasks.map((id) => (
+                  <button
+                    key={id}
+                    onClick={() => router.push(`/workspace?task_id=${id}`)}
+                    className="w-full flex items-center justify-between rounded-sm border border-border/60 bg-background/50 px-3 py-2 text-xs font-mono hover:border-primary/50 transition-colors"
+                  >
+                    {id.slice(0, 12)}…
+                    <ArrowRight className="h-3 w-3" />
+                  </button>
+                ))}
               </div>
-              <div className="pt-2 border-t border-border/60 space-y-1.5 font-display text-xs">
-                <div className="flex justify-between">
-                  <span className="italic text-muted-foreground">{lang === "zh" ? "已用" : "Used"}</span>
-                  <span>14s / 90s</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="italic text-muted-foreground">{lang === "zh" ? "剩餘" : "Remaining"}</span>
-                  <span>76s</span>
-                </div>
-              </div>
-            </div>
-            <Button className="w-full mt-5 rounded-full gap-2" variant="outline">
-              {lang === "zh" ? "查看詳情" : "View Details"}
-              <ChevronRight className="h-3.5 w-3.5" />
-            </Button>
-          </Card>
+            </Card>
+          )}
 
-          <Card className="border-border/60 bg-card/40 p-6">
-            <p className="font-display text-[10px] uppercase tracking-[0.2em] text-muted-foreground">{lang === "zh" ? "能力" : "Capabilities"}</p>
-            <ul className="mt-3 space-y-2 text-sm font-display">
-              {[
-                lang === "zh" ? "生成完整短視頻" : "Generate a complete reel",
-                lang === "zh" ? "編輯現有項目" : "Edit existing projects",
-                lang === "zh" ? "翻譯並重新配音" : "Translate & re-voice",
-                lang === "zh" ? "批量處理多個任務" : "Batch process tasks",
-                lang === "zh" ? "優化提示詞" : "Refine prompts",
-              ].map((c) => (
-                <li key={c} className="flex items-baseline gap-2 text-foreground/80">
-                  <span className="text-primary">·</span>
-                  <span className="italic">{c}</span>
+          <Card className="border-border/60 bg-card/40 p-5">
+            <p className="font-display text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              {lang === "zh" ? "可用工具" : "Tools"}
+            </p>
+            <ul className="mt-3 space-y-2.5">
+              {tools.map((t) => (
+                <li key={t.name}>
+                  <div className="font-mono text-[11px] text-primary">{t.name}</div>
+                  <div className="text-xs text-muted-foreground leading-relaxed">{t.description}</div>
                 </li>
               ))}
+              {tools.length === 0 && (
+                <li className="text-xs text-muted-foreground italic">
+                  {lang === "zh" ? "載入中…" : "Loading…"}
+                </li>
+              )}
             </ul>
           </Card>
         </div>

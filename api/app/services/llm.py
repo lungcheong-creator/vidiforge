@@ -94,23 +94,40 @@ def _resolve_key(provider: LLMProvider, byok: dict[str, str]) -> str:
     return key
 
 
-def _resolve_model(provider: LLMProvider) -> tuple[str, str | None]:
-    """Return (model_name, base_url) for the provider."""
-    if provider == LLMProvider.OPENAI:
-        return "gpt-4o-mini", None
-    if provider == LLMProvider.ANTHROPIC:
-        return "claude-3-5-sonnet-20241022", None
-    if provider == LLMProvider.DEEPSEEK:
-        return "deepseek-chat", "https://api.deepseek.com/v1"
-    if provider == LLMProvider.GEMINI:
-        return "gemini-1.5-flash", None
-    if provider == LLMProvider.MOONSHOT:
-        return "moonshot-v1-8k", "https://api.moonshot.cn/v1"
-    if provider == LLMProvider.QWEN:
-        return "qwen-plus", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    if provider == LLMProvider.OPENAI_COMPATIBLE:
-        return "gpt-4o-mini", settings.openai_compatible_base_url or None
-    raise ConfigError(f"Unknown LLM provider: {provider.value}")
+def _resolve_model(provider: LLMProvider, override: str | None = None) -> tuple[str, str | None]:
+    """Return (model_name, base_url) for the provider, honouring an override."""
+    defaults: dict[LLMProvider, tuple[str, str | None]] = {
+        LLMProvider.OPENAI: ("gpt-4o-mini", None),
+        LLMProvider.ANTHROPIC: ("claude-3-5-sonnet-20241022", None),
+        LLMProvider.DEEPSEEK: ("deepseek-chat", "https://api.deepseek.com/v1"),
+        LLMProvider.GEMINI: ("gemini-1.5-flash", None),
+        LLMProvider.MOONSHOT: ("moonshot-v1-8k", "https://api.moonshot.cn/v1"),
+        LLMProvider.QWEN: ("qwen-plus", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        LLMProvider.OPENAI_COMPATIBLE: (
+            "gpt-4o-mini",
+            settings.openai_compatible_base_url or None,
+        ),
+    }
+    if provider not in defaults:
+        raise ConfigError(f"Unknown LLM provider: {provider.value}")
+    model, base_url = defaults[provider]
+    return (override or model), base_url
+
+
+async def list_models() -> list[dict[str, Any]]:
+    """Curated model catalogue for the UI (provider → models)."""
+    return [
+        {"provider": "deepseek", "id": "deepseek-flash", "name": "DeepSeek V4.1 Flash",
+         "note": "1M context · fast · recommended for batch"},
+        {"provider": "deepseek", "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro",
+         "note": "1M context · highest quality"},
+        {"provider": "openai", "id": "gpt-4o-mini", "name": "GPT-4o mini", "note": ""},
+        {"provider": "anthropic", "id": "claude-3-5-sonnet-20241022",
+         "name": "Claude 3.5 Sonnet", "note": ""},
+        {"provider": "gemini", "id": "gemini-1.5-flash", "name": "Gemini 1.5 Flash", "note": ""},
+        {"provider": "moonshot", "id": "moonshot-v1-8k", "name": "Moonshot Kimi", "note": ""},
+        {"provider": "qwen", "id": "qwen-plus", "name": "通義千問 Plus", "note": ""},
+    ]
 
 
 def _strip_code_fence(text: str) -> str:
@@ -151,6 +168,7 @@ async def generate_script(
     topic: str,
     keywords: list[str],
     provider: LLMProvider | None = None,
+    model: str | None = None,
     language: str = "zh-CN",
     segment_count: int = 5,
     byok: dict[str, str] | None = None,
@@ -160,7 +178,7 @@ async def generate_script(
     byok = byok or {}
 
     api_key = _resolve_key(provider, byok)
-    model, base_url = _resolve_model(provider)
+    model_name, base_url = _resolve_model(provider, model)
     system_prompt = _resolve_system_prompt(language)
 
     user_msg = topic
@@ -172,14 +190,13 @@ async def generate_script(
 
     try:
         resp = await client.chat.completions.create(
-            model=model,
+            model=model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.8,
             max_tokens=1500,
-            response_format={"type": "json_object"} if "gpt" in model or "qwen" in model else None,
         )
         raw = resp.choices[0].message.content or ""
     except Exception as e:

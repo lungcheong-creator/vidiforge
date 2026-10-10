@@ -103,16 +103,103 @@ export function streamUrl(path: string | null | undefined): string | null {
   if (!path) return null;
   const token = getToken();
   const base = BASE_URL.replace(/\/$/, "");
-  return token ? `${base}/api/v1/stream/${path}?token=${encodeURIComponent(token)}` : `${base}/api/v1/stream/${path}`;
+  return token
+    ? `${base}/api/v1/stream/${path}?token=${encodeURIComponent(token)}`
+    : `${base}/api/v1/stream/${path}`;
 }
 
 export function downloadUrl(path: string | null | undefined): string | null {
   if (!path) return null;
   const token = getToken();
   const base = BASE_URL.replace(/\/$/, "");
-  return token ? `${base}/api/v1/download/${path}?token=${encodeURIComponent(token)}` : `${base}/api/v1/download/${path}`;
+  return token
+    ? `${base}/api/v1/download/${path}?token=${encodeURIComponent(token)}`
+    : `${base}/api/v1/download/${path}`;
 }
 
-// Note: stream/download URL embedding the token is a workaround for <video>
-// / <a> tags that can't set the Authorization header. Server-side: streaming
-// endpoints accept ?token=... for v1 single-user convenience.
+/** Download URL for a finished task; the API redirects to a signed GCS URL. */
+export function taskFileUrl(taskId: string): string {
+  const token = getToken();
+  const base = BASE_URL.replace(/\/$/, "");
+  return `${base}/api/v1/tasks/${taskId}/file${
+    token ? `?token=${encodeURIComponent(token)}` : ""
+  }`;
+}
+
+// ============ Batches ============
+export interface BatchSummary {
+  id: string;
+  name: string;
+  status: "pending" | "running" | "done" | "failed";
+  total: number;
+  completed: number;
+  failed: number;
+  topics: string[];
+  task_ids: string[];
+  created_at: string;
+  updated_at: string;
+  error: string | null;
+  tasks?: {
+    id: string;
+    topic: string;
+    status: string;
+    progress: number;
+    current_stage: string | null;
+    error: string | null;
+    duration: number | null;
+  }[];
+}
+
+export const createBatch = (body: {
+  name: string;
+  topics: string[];
+  duration?: number;
+  segments?: number;
+  aspect?: "9:16" | "16:9" | "1:1";
+  llm_model?: string;
+}) =>
+  request<BatchSummary>("/api/v1/batches", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const listBatches = (limit = 50, offset = 0) =>
+  request<{ total: number; batches: BatchSummary[] }>(
+    `/api/v1/batches?limit=${limit}&offset=${offset}`
+  );
+
+export const getBatch = (id: string) => request<BatchSummary>(`/api/v1/batches/${id}`);
+
+export const deleteBatch = (id: string) =>
+  request<{ ok: boolean; batch_id: string }>(`/api/v1/batches/${id}`, { method: "DELETE" });
+
+// ============ Agent ============
+export interface AgentToolCall {
+  tool: string;
+  arguments: Record<string, unknown>;
+  result: Record<string, unknown>;
+}
+
+export interface AgentReply {
+  reply: string;
+  model: string;
+  tool_calls: AgentToolCall[];
+}
+
+export const agentChat = (messages: { role: "user" | "assistant"; content: string }[], model = "deepseek-flash") =>
+  request<AgentReply>("/api/v1/agent/chat", {
+    method: "POST",
+    body: JSON.stringify({ messages, model }),
+  });
+
+export const listAgentTools = () =>
+  request<{ name: string; description: string }[]>("/api/v1/agent/tools");
+
+// ============ Models catalogue ============
+export const listModels = () =>
+  request<{ provider: string; id: string; name: string; note: string }[]>(
+    "/api/v1/llm/models"
+  );
+
+// Note: stream/download URLs carry the token in the query string because
+// <video> and <a download> cannot set an Authorization header.

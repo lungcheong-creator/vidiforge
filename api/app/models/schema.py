@@ -74,6 +74,7 @@ class VideoRequest(BaseModel):
     segments: int = Field(default=5, ge=1, le=20)
 
     llm_provider: LLMProvider = LLMProvider.OPENAI
+    llm_model: str = ""  # optional override, e.g. "deepseek-flash"
     script: Optional[Script] = None  # user-provided script override
 
     voice: VoiceConfig = Field(default_factory=VoiceConfig)

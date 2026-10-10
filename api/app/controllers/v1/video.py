@@ -65,3 +65,31 @@ async def get_task(task_id: str, _: VerifiedToken) -> VideoTask:
 async def delete_task(task_id: str, _: VerifiedToken) -> dict:
     await task_service.delete_task(task_id)
     return {"ok": True, "task_id": task_id}
+
+
+@tasks_router.get("/{task_id}/file", summary="Resolve the rendered video for a task")
+async def task_file(task_id: str, _: VerifiedToken):
+    """Redirect to a signed GCS URL, or stream the object when signing is unavailable."""
+    from fastapi.responses import RedirectResponse, StreamingResponse
+    import io
+
+    from app.config.config import settings
+    from app.services import blobstore, tasks_repo
+
+    raw = tasks_repo.get(task_id)
+    if raw is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    key = raw.get("output_path")
+    if not key:
+        raise HTTPException(status_code=409, detail="Task has no output yet")
+
+    if blobstore.enabled():
+        url = blobstore.signed_url(key, minutes=settings.gcs_signed_url_minutes)
+        if url:
+            return RedirectResponse(url, status_code=302)
+        data = blobstore.get_bytes(key)
+        if data is None:
+            raise HTTPException(status_code=404, detail="Output object missing")
+        return StreamingResponse(io.BytesIO(data), media_type="video/mp4")
+
+    raise HTTPException(status_code=404, detail="Output not found")

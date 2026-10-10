@@ -3,8 +3,10 @@
 from fastapi import APIRouter
 
 from app.controllers.v1 import (
+    agent,
     audio,
     base,
+    batch,
     files,
     llm,
     material,
@@ -26,6 +28,8 @@ api_router.include_router(llm.router, prefix="/llm", tags=["llm"])
 api_router.include_router(audio.router, prefix="/audio", tags=["audio"])
 api_router.include_router(subtitle.router, prefix="/subtitle", tags=["subtitle"])
 api_router.include_router(material.router, prefix="/materials", tags=["materials"])
+api_router.include_router(batch.router, prefix="/batches", tags=["batches"])
+api_router.include_router(agent.router, prefix="/agent", tags=["agent"])
 api_router.include_router(settings_ctrl.router, prefix="/settings", tags=["settings"])
 
 # Media serving lives at the API root so output paths stay short and stable

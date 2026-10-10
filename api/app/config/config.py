@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     storage_upload_dir: str = "storage/upload"
     database_url: str = "sqlite:///./storage/vidiforge.db"
 
+    # === Durable object storage (GCS) ===
+    # When empty, everything falls back to local files (development).
+    gcs_bucket: str = ""
+    gcs_signed_url_minutes: int = 60
+
     # === Provider switches ===
     llm_provider: Literal[
         "openai", "anthropic", "deepseek", "gemini", "moonshot",

@@ -41,29 +41,36 @@ BUILD_ID = "2026-10-10-voice-fix-01"
 async def lifespan(app: FastAPI):
     log.info("VidiForge starting (env=%s)", settings.vidiforge_env)
     load_toml_overrides()
-    # Cloud Run uses /tmp for writable storage; ensure it exists
-    import os
-    os.makedirs("/tmp/storage/outputs", exist_ok=True)
-    os.makedirs("/tmp/storage/cache", exist_ok=True)
-    os.makedirs("/tmp/storage/upload", exist_ok=True)
-    # Symlink /app/storage -> /tmp/storage so the app's relative paths work
-    if not os.path.exists("/app/storage"):
+
+    # Cloud Run's container filesystem is read-only except for /tmp. Point the
+    # writable work area there so scratch files and the SQLite fallback work.
+    on_cloud_run = bool(os.environ.get("K_SERVICE"))
+    if on_cloud_run or Path("/app").is_dir():
+        os.makedirs("/tmp/storage/outputs", exist_ok=True)
+        os.makedirs("/tmp/storage/cache", exist_ok=True)
+        os.makedirs("/tmp/storage/upload", exist_ok=True)
+        if not os.path.exists("/app/storage"):
+            try:
+                os.symlink("/tmp/storage", "/app/storage", target_is_directory=True)
+            except (FileExistsError, PermissionError, OSError) as e:
+                log.warning("could not link /app/storage: %s", e)
+
+    for path in (settings.outputs_path, settings.cache_path, settings.upload_path):
         try:
-            os.symlink("/tmp/storage", "/app/storage", target_is_directory=True)
-        except FileExistsError:
-            pass
-    # Also set DATABASE_URL to /tmp for persistence across requests
-    if settings.database_url.startswith("sqlite:///./"):
-        rel = settings.database_url.replace("sqlite:///./", "")
-        os.environ["VIDIFORGE_DB_PATH"] = f"/tmp/storage/{rel}"
-    settings.storage_output_dir and os.makedirs(settings.outputs_path, exist_ok=True)
-    os.makedirs(settings.cache_path, exist_ok=True)
-    os.makedirs(settings.upload_path, exist_ok=True)
+            os.makedirs(path, exist_ok=True)
+        except OSError as e:
+            log.warning("cannot create %s: %s", path, e)
+
     init_db()
-    log.info("Storage: outputs=%s cache=%s upload=%s",
-             settings.outputs_path, settings.cache_path, settings.upload_path)
-    log.info("FFmpeg: %s", settings.ffmpeg_path)
-    log.info("Static frontend: %s (exists=%s)", STATIC_DIR, STATIC_DIR.exists())
+    log.info(
+        "storage: outputs=%s cache=%s upload=%s | durable=%s",
+        settings.outputs_path,
+        settings.cache_path,
+        settings.upload_path,
+        settings.gcs_bucket or "local-filesystem",
+    )
+    log.info("ffmpeg: %s", settings.ffmpeg_path)
+    log.info("frontend: %s (exists=%s)", STATIC_DIR, STATIC_DIR.exists())
     yield
     log.info("VidiForge shutting down")
 

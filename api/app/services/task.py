@@ -1,31 +1,30 @@
-"""Pipeline orchestrator. Runs the 6-stage video generation pipeline:
+"""Pipeline orchestrator. Runs the video generation pipeline:
 
-  script → voice → footage → subtitle → bgm → render
+  script → voice → footage → subtitle → bgm → render → upload
+
+Task metadata and rendered output are persisted through `tasks_repo` /
+`blobstore` so they survive instance restarts.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 from app.config.config import settings
-from app.db.database import session_scope
-from app.db.models import Task
 from app.models.const import TaskStatus
 from app.models.exception import TaskError
-from app.models.schema import Script, VideoRequest, VideoTask, TaskStage
-from app.services import bgm, llm, material, subtitle, voice, video
+from app.models.schema import Script, VideoRequest, VideoTask
+from app.services import bgm, blobstore, llm, material, subtitle, tasks_repo, voice, video
 from app.services.state import TaskState
 
 
 log = logging.getLogger("vidiforge.pipeline")
-
 
 STAGES = [
     ("script", 5, 15),
@@ -37,24 +36,16 @@ STAGES = [
 ]
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 async def run_pipeline(task_id: str, request: VideoRequest) -> None:
-    """Run the full pipeline for one task. Persists progress to the Task row."""
+    """Run the full pipeline for one task, reporting progress as it goes."""
     state = TaskState(task_id)
-    task_dir = settings.outputs_path / task_id
     work_dir = settings.cache_path / task_id
-    task_dir.mkdir(parents=True, exist_ok=True)
     work_dir.mkdir(parents=True, exist_ok=True)
-
-    byok = request.api_keys or {}
 
     try:
         state.update(status=TaskStatus.RUNNING, progress=0)
 
-        # ===== STAGE 1: SCRIPT =====
+        # ===== 1. SCRIPT =====
         state.update(current_stage="script", progress=STAGES[0][1])
         if request.script:
             script = request.script
@@ -63,31 +54,30 @@ async def run_pipeline(task_id: str, request: VideoRequest) -> None:
                 topic=request.topic,
                 keywords=request.keywords,
                 provider=request.llm_provider,
+                model=request.llm_model or None,
                 language=request.language.value,
                 segment_count=request.segments,
-                byok=byok,
+                byok=request.api_keys or {},
             )
-        state.update(script_json=script.model_dump_json())
+        state.update(script=script.model_dump())
 
-        # ===== STAGE 2: VOICE =====
+        # ===== 2. VOICE =====
         state.update(current_stage="voice", progress=STAGES[1][1])
-        voice_dir = work_dir / "voice"
-        voice_paths = await voice.synthesize_script(script.segments, request.voice, voice_dir)
+        voice_paths = await voice.synthesize_script(
+            script.segments, request.voice, work_dir / "voice"
+        )
         if not voice_paths:
             raise TaskError("Voice synthesis produced no output.")
-        # Concatenate all voice segments into one track
         full_voice = work_dir / "voice_full.mp3"
         await video.concatenate_voice_segments(voice_paths, full_voice)
         state.update(progress=STAGES[2][1])
 
-        # ===== STAGE 3: FOOTAGE =====
+        # ===== 3. FOOTAGE =====
         state.update(current_stage="footage", progress=STAGES[2][1])
         footage_dir = work_dir / "footage"
-        # Try API-based footage first; missing segments get a generated fallback
         footage_paths = await material.fetch_footage_for_script(
             script.segments, request.material, footage_dir
         )
-        # Fill any missing segments with a generated solid-colour fallback clip
         if not all(footage_paths):
             missing = [s for s, p in zip(script.segments, footage_paths) if not (p and p.is_file())]
             await _generate_fallback_footage(missing, footage_dir, request.aspect.value)
@@ -103,18 +93,17 @@ async def run_pipeline(task_id: str, request: VideoRequest) -> None:
             footage_paths = rebuilt
         state.update(progress=STAGES[3][1])
 
-        # ===== STAGE 4: SUBTITLE =====
+        # ===== 4. SUBTITLE =====
         state.update(current_stage="subtitle", progress=STAGES[3][1])
-        ass_path = work_dir / "subtitle.ass"
         from app.utils.ffmpeg import probe_duration
+
         video_width, video_height = {
             "9:16": (1080, 1920),
             "16:9": (1920, 1080),
             "1:1": (1080, 1080),
         }.get(request.aspect.value, (1080, 1920))
 
-        # Use concatenated voice track + its duration for cue alignment
-        total_dur = probe_duration(full_voice) or sum(s.duration for s in script.segments)
+        ass_path = work_dir / "subtitle.ass"
         await subtitle.generate_subtitles_for_segments(
             segments=script.segments,
             voice_paths=voice_paths,
@@ -125,14 +114,15 @@ async def run_pipeline(task_id: str, request: VideoRequest) -> None:
             video_height=video_height,
             voice_id=request.voice.voice_id,
         )
+        total_dur = probe_duration(full_voice) or float(sum(s.duration for s in script.segments)) or 15.0
         state.update(progress=STAGES[4][1])
 
-        # ===== STAGE 5: BGM =====
+        # ===== 5. BGM =====
         state.update(current_stage="bgm", progress=STAGES[4][1])
         bgm_path = bgm.pick_bgm(request.bgm)
         state.update(progress=STAGES[5][1])
 
-        # ===== STAGE 6: RENDER =====
+        # ===== 6. RENDER =====
         state.update(current_stage="render", progress=STAGES[5][1])
         final_path = await video.compose_full_video(
             footage_clips=footage_paths,
@@ -141,26 +131,33 @@ async def run_pipeline(task_id: str, request: VideoRequest) -> None:
             subtitle_path=ass_path,
             aspect=request.aspect.value,
             target_duration=total_dur,
-            output_dir=task_dir,
+            output_dir=work_dir / "out",
             work_dir=work_dir,
         )
 
-        # Persist final state
-        file_size = final_path.stat().st_size if final_path.exists() else 0
+        # ===== 7. UPLOAD (durable) =====
+        state.update(current_stage="upload", progress=96)
+        key = tasks_repo.output_key(task_id, final_path.name)
+        blobstore.upload_file(final_path, key, content_type="video/mp4")
         duration = probe_duration(final_path) or total_dur
-        rel_path = str(final_path.relative_to(settings.storage_root.parent))
+
         state.update(
             status=TaskStatus.DONE,
             progress=100,
-            current_stage=None,
-            output_path=rel_path,
+            clear_stage=True,
+            output_key=key,
+            output_url=f"/api/v1/tasks/{task_id}/file",
             duration=duration,
-            file_size=file_size,
+            file_size=final_path.stat().st_size,
         )
+        log.info("task %s finished -> %s", task_id, key)
 
     except Exception as e:
+        log.exception("pipeline failed for task %s", task_id)
         state.update(status=TaskStatus.FAILED, error=str(e))
         raise
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 async def _generate_fallback_footage(
@@ -191,102 +188,79 @@ async def _generate_fallback_footage(
             "-i", f"color=c=0x{colour}:s={width}x{height}:d=5:r=24",
             "-vf", "fade=t=in:st=0:d=0.5,format=yuv420p",
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-            "-t", "5",
-            str(out),
+            "-t", "5", str(out),
         ]
         try:
             subprocess.run(args, check=True, capture_output=True, timeout=60)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
-            log.warning("Fallback clip generation failed for segment %s: %s", seg.id, e)
+            log.warning("fallback clip failed for segment %s: %s", seg.id, e)
+
+
+# --------------------------------------------------------------- task API
+
+
+def _to_model(raw: dict[str, Any]) -> VideoTask:
+    script = None
+    if isinstance(raw.get("script"), dict):
+        try:
+            script = Script.model_validate(raw["script"])
+        except Exception:
+            script = None
+
+    progress = int(raw.get("progress") or 0)
+    stage = raw.get("current_stage")
+
+    stages = []
+    for name, lo, hi in STAGES:
+        if progress >= hi:
+            st, sp = TaskStatus.DONE, 100
+        elif stage == name:
+            st = TaskStatus.RUNNING
+            sp = int((progress - lo) / max(1, hi - lo) * 100)
+        else:
+            st, sp = TaskStatus.PENDING, 0
+        stages.append({"name": name, "status": st.value, "progress": max(0, min(100, sp))})
+
+    return VideoTask(
+        id=raw["id"],
+        topic=raw.get("topic", ""),
+        aspect=raw.get("aspect", "9:16"),
+        status=raw.get("status", "pending"),
+        progress=progress,
+        current_stage=stage,
+        script=script,
+        output_path=raw.get("output_path"),
+        output_url=raw.get("output_url"),
+        duration=raw.get("duration"),
+        file_size=raw.get("file_size"),
+        stages=stages,
+        error=raw.get("error"),
+        config=raw.get("config"),
+        created_at=raw.get("created_at") or datetime.now(timezone.utc).isoformat(),
+        updated_at=raw.get("updated_at") or datetime.now(timezone.utc).isoformat(),
+    )
 
 
 async def create_task(request: VideoRequest) -> VideoTask:
-    """Create a new task row and return its representation."""
-    task_id = uuid.uuid4().hex
-    config_json = request.model_dump_json()
-    now = _utcnow()
-
-    with session_scope() as s:
-        task = Task(
-            id=task_id,
-            topic=request.topic,
-            aspect=request.aspect.value,
-            status=TaskStatus.PENDING.value,
-            progress=0,
-            config_json=config_json,
-            created_at=now,
-            updated_at=now,
-        )
-        s.add(task)
-        s.commit()
-
-    return await get_task(task_id)
+    raw = tasks_repo.create(
+        topic=request.topic,
+        aspect=request.aspect.value,
+        config=request.model_dump(mode="json"),
+    )
+    return _to_model(raw)
 
 
 async def get_task(task_id: str) -> VideoTask:
-    with session_scope() as s:
-        task = s.get(Task, task_id)
-        if not task:
-            raise TaskError(f"Task {task_id} not found")
-
-        script = None
-        if task.script_json:
-            try:
-                script = Script.model_validate_json(task.script_json)
-            except Exception:
-                script = None
-
-        stages = [
-            TaskStage(name=stage[0], status=TaskStatus.DONE if task.progress >= stage[2] else (
-                TaskStatus.RUNNING if task.progress >= stage[1] else TaskStatus.PENDING
-            ), progress=min(100, max(0, int((task.progress - stage[1]) / max(1, (stage[2] - stage[1])) * 100))))
-            for stage in STAGES
-        ]
-
-        output_url = None
-        if task.output_path:
-            output_url = f"/api/v1/stream/{task.output_path}"
-        return VideoTask(
-            id=task.id,
-            topic=task.topic,
-            aspect=task.aspect,  # type: ignore[arg-type]
-            status=task.status,  # type: ignore[arg-type]
-            progress=task.progress,
-            current_stage=task.current_stage,
-            script=script,
-            output_path=task.output_path,
-            output_url=output_url,
-            duration=task.duration,
-            file_size=task.file_size,
-            stages=stages,
-            error=task.error,
-            config=json.loads(task.config_json) if task.config_json else None,
-            created_at=task.created_at,
-            updated_at=task.updated_at,
-        )
+    raw = tasks_repo.get(task_id)
+    if raw is None:
+        raise TaskError(f"Task {task_id} not found")
+    return _to_model(raw)
 
 
 async def list_tasks(limit: int = 50, offset: int = 0) -> tuple[int, list[VideoTask]]:
-    from sqlmodel import select
-    with session_scope() as s:
-        stmt = select(Task).order_by(Task.created_at.desc()).offset(offset).limit(limit)
-        rows = list(s.exec(stmt))
-        total_stmt = select(Task)
-        total = len(list(s.exec(total_stmt)))
-        tasks = [await get_task(r.id) for r in rows]
-        return total, tasks
+    total, raws = tasks_repo.list_tasks(limit=limit, offset=offset)
+    return total, [_to_model(r) for r in raws]
 
 
 async def delete_task(task_id: str) -> None:
-    with session_scope() as s:
-        task = s.get(Task, task_id)
-        if task:
-            s.delete(task)
-            s.commit()
-    # Cleanup files
-    out_dir = settings.outputs_path / task_id
-    work_dir = settings.cache_path / task_id
-    if out_dir.exists():
-        shutil.rmtree(out_dir, ignore_errors=True)
-    if work_dir.exists():
-        shutil.rmtree(work_dir, ignore_errors=True)
+    tasks_repo.delete(task_id)
