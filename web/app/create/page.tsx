@@ -76,7 +76,7 @@ export default function CreatePage() {
 
       const task = await createVideo(req);
       router.push(`/workspace?task_id=${task.id}`);
-    } catch (e) {
+    } catch (e: any) {
       setError(e && e.message ? e.message : "Failed to create video");
       setSubmitting(false);
     }

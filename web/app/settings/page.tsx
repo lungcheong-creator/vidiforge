@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Key, Lock, Eye, EyeOff, Check, Shield, HardDrive, Info, ExternalLink, Github, Heart, RefreshCw, AlertCircle } from "lucide-react";
 import { listKeys, saveKey, listLLMProviders, deleteKey, getHealth } from "@/lib/api";
-import type { ApiKeyEntry as ApiKeyEntryType, LLMProviderInfo } from "@vidiforge/shared";
+import { Input } from "@/components/ui/input";
+import type { ApiKeyEntry as ApiKeyEntryType } from "@/lib/api-types";
 import { cn } from "@/lib/utils";
 
 export default function SettingsPage() {
@@ -15,7 +16,7 @@ export default function SettingsPage() {
   const [tab, setTab] = useState<"keys" | "prefs" | "storage" | "about">("keys");
   const [showKey, setShowKey] = useState(false);
   const [entries, setEntries] = useState<ApiKeyEntryType[]>([]);
-  const [providers, setProviders] = useState<LLMProviderInfo[]>([]);
+  const [providers, setProviders] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");

@@ -1,13 +1,23 @@
-"""VidiForge FastAPI application entry."""
+"""VidiForge FastAPI application entry.
+
+Serves:
+  - /api/v1/*      → JSON API (LLM, video, settings, etc.)
+  - /*             → Static Next.js export (SPA frontend)
+
+The frontend is built into ./static/ at image build time (see Dockerfile).
+"""
 
 from __future__ import annotations
 
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config.config import load_toml_overrides, settings
 from app.db.database import init_db
@@ -21,6 +31,8 @@ logging.basicConfig(
 )
 log = logging.getLogger("vidiforge")
 
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,6 +45,7 @@ async def lifespan(app: FastAPI):
     log.info("Storage: outputs=%s cache=%s upload=%s",
              settings.outputs_path, settings.cache_path, settings.upload_path)
     log.info("FFmpeg: %s", settings.ffmpeg_path)
+    log.info("Static frontend: %s (exists=%s)", STATIC_DIR, STATIC_DIR.exists())
     yield
     log.info("VidiForge shutting down")
 
@@ -46,8 +59,8 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# === CORS ===
-origins = [o.strip() for o in settings.web_origin.split(",") if o.strip()]
+# === CORS (still useful for local dev with separate ports) ===
+origins = [o.strip() for o in settings.web_origin.split(",") if o.strip() and o.strip() != "*"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins or ["*"],
@@ -66,14 +79,55 @@ async def healthz() -> HealthResponse:
     )
 
 
-@app.get("/", tags=["meta"])
+@app.get("/api", tags=["meta"])
 async def root() -> dict:
     return {
         "name": "VidiForge",
         "version": "0.1.0",
         "docs": "/docs",
         "health": "/healthz",
+        "ui": "/" if STATIC_DIR.exists() else None,
     }
 
 
+# Mount API under /api/v1
 app.include_router(api_router, prefix="/api/v1")
+
+# === Static frontend (SPA) ===
+# If web/out/ exists (built into ./static/ by Dockerfile), mount it.
+# Fallback: serve index.html for client-side routing.
+if STATIC_DIR.exists():
+    # Serve /_next/*, /assets/*, etc. as static files
+    app.mount(
+        "/_next",
+        StaticFiles(directory=str(STATIC_DIR / "_next")),
+        name="next-static",
+    )
+
+    @app.get("/", include_in_schema=False)
+    async def serve_root():
+        return FileResponse(str(STATIC_DIR / "index.html"), media_type="text/html")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def serve_spa(path: str):
+        # API routes handled above; this is the SPA fallback
+        if path.startswith("api/") or path.startswith("docs") or path.startswith("redoc"):
+            return None  # let FastAPI return 404
+        # Try to serve the actual static file first
+        file_path = STATIC_DIR / path
+        if file_path.is_file():
+            return FileResponse(str(file_path))
+        # Fallback to index.html for client-side routing
+        return FileResponse(str(STATIC_DIR / "index.html"), media_type="text/html")
+else:
+    log.warning("Static frontend not found at %s — running API-only mode", STATIC_DIR)
+
+    @app.get("/", tags=["meta"])
+    async def root_api_only() -> dict:
+        return {
+            "name": "VidiForge",
+            "version": "0.1.0",
+            "docs": "/docs",
+            "health": "/healthz",
+            "note": "API-only mode. Static frontend not built.",
+        }

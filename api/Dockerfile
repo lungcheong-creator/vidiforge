@@ -1,4 +1,25 @@
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1.7
+# Multi-stage: build Next.js static export, then build FastAPI image
+
+# ============ Stage 1: Build Next.js static export ============
+FROM node:20-alpine AS web-builder
+WORKDIR /web
+
+# Copy web package files
+COPY web/package.json web/package-lock.json* ./
+RUN npm install --no-audit --no-fund
+
+# Copy web source
+COPY web/ ./
+
+# Build-time env: same-origin (FastAPI serves it)
+ENV NEXT_PUBLIC_API_URL=""
+RUN npm run build
+# Output: /web/out/
+
+
+# ============ Stage 2: Build FastAPI + FFmpeg + serve static ============
+FROM python:3.11-slim AS api
 
 # Install system deps + FFmpeg + CJK fonts
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,11 +37,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install Python deps first (cached layer)
-COPY requirements.txt .
+COPY api/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY . .
+COPY api/ ./
+
+# Copy static frontend from web-builder
+COPY --from=web-builder /web/out ./static
 
 # Storage directories (mounted as volume on Railway)
 RUN mkdir -p /app/storage/outputs /app/storage/cache /app/storage/upload

@@ -10,10 +10,12 @@ import type {
   VoiceProviderInfo,
 } from "@vidiforge/shared";
 
+// When deployed as static export served by FastAPI, all requests go to same origin.
+// In dev mode, override with NEXT_PUBLIC_API_URL (e.g. http://localhost:8080).
 const BASE_URL =
   (typeof window !== "undefined" && (window as any).__VIDIFORGE_API_URL__) ||
   process.env.NEXT_PUBLIC_API_URL ||
-  "http://localhost:8080";
+  "";
 
 const TOKEN_STORAGE_KEY = "vf_api_token";
 
@@ -55,7 +57,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const getHealth = () => request<HealthResponse>("/healthz");
 
 // ============ Videos ============
-export const createVideo = (req: VideoRequest) =>
+export const createVideo = (req: VideoRequest | Record<string, any>) =>
   request<VideoTask>("/api/v1/videos", {
     method: "POST",
     body: JSON.stringify(req),

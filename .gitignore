@@ -71,4 +71,4 @@ logs/
 
 # Claude / agent files
 .claude/
-.automation/
+.automation/api/static/
