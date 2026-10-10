@@ -46,23 +46,26 @@ def make_concat_manifest(clips: list[Path], manifest_path: Path) -> None:
     """Write an ffmpeg concat demuxer manifest."""
     lines = []
     for clip in clips:
-        if not clip or not clip.exists():
+        if clip is None or not clip.is_file():
             continue
         # Use absolute path; escape single quotes
         path_str = str(clip.resolve()).replace("'", "'\\''")
         lines.append(f"file '{path_str}'")
+    if not lines:
+        raise TaskError("No playable clip files for the concat manifest.")
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def concat_clips(
-    clips: list[Path],
+    clips: list[Path | None],
     output_path: Path,
     aspect: str,
     target_duration: float,
 ) -> Path:
     """Concatenate multiple video clips into one, normalised to target resolution."""
-    valid = [c for c in clips if c and c.exists()]
+    # Only real files — a Path("") would resolve to the working directory.
+    valid = [c for c in clips if c is not None and c.is_file()]
     if not valid:
         raise TaskError("No valid footage clips to concatenate.")
 
@@ -93,27 +96,25 @@ def mix_audio(
     output_path: Path,
     bgm_volume: float = 0.3,
 ) -> Path:
-    """Replace the video's audio with voice-over + optional BGM."""
+    """Replace the video's audio with voice-over + optional background music."""
     inputs = ["-i", str(video_path), "-i", str(voice_path)]
-    if bgm_path and bgm_path.exists():
+    has_bgm = bgm_path is not None and bgm_path.is_file()
+
+    args = _ffmpeg() + inputs
+    if has_bgm:
+        # Loop the BGM to cover the full runtime, duck it, then mix with the voice.
         inputs += ["-i", str(bgm_path)]
-
-    filter_complex_parts = []
-    if bgm_path and bgm_path.exists():
-        # amix voice + BGM (BGM at lower volume, looped to fill)
-        filter_complex_parts.append(
+        args = _ffmpeg() + inputs + [
+            "-filter_complex",
             f"[2:a]aloop=loop=-1:size=2e+09,volume={bgm_volume}[bgm];"
-        )
-        filter_complex_parts.append(
-            "[1:a][bgm]amix=inputs=2:duration=shortest:dropout_transition=2[aout]"
-        )
-        audio_map = ["-map", "[aout]"]
+            "[1:a][bgm]amix=inputs=2:duration=shortest:dropout_transition=2[aout]",
+            "-map", "0:v:0",
+            "-map", "[aout]",
+        ]
     else:
-        audio_map = ["-map", "1:a"]
+        args += ["-map", "0:v:0", "-map", "1:a:0"]
 
-    args = _ffmpeg() + inputs + [
-        "-filter_complex", "".join(filter_complex_parts),
-        *audio_map,
+    args += [
         "-c:v", "copy",
         "-c:a", "aac",
         "-b:a", "192k",
@@ -145,7 +146,7 @@ def burn_subtitles(
 
 async def compose_full_video(
     *,
-    footage_clips: list[Path],
+    footage_clips: list[Path | None],
     voice_track: Path,
     bgm_path: Path | None,
     subtitle_path: Path,
@@ -173,6 +174,8 @@ async def compose_full_video(
     # Cleanup intermediates
     step1.unlink(missing_ok=True)
     step2.unlink(missing_ok=True)
+    # Remove the concat manifest so it can't be mistaken for media
+    (work_dir / "01_concat.concat.txt").unlink(missing_ok=True)
 
     return final_path
 
@@ -182,7 +185,7 @@ async def concatenate_voice_segments(
     output_path: Path,
 ) -> Path:
     """Concat multiple mp3 voice segments into a single voice track."""
-    valid = [s for s in segments if s and s.exists()]
+    valid = [s for s in segments if s is not None and s.is_file()]
     if not valid:
         raise TaskError("No voice segments to concatenate.")
 

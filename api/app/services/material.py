@@ -141,12 +141,17 @@ async def fetch_footage_for_script(
     segments: list[ScriptSegment],
     config: MaterialConfig,
     cache_dir: Path,
-) -> list[Path]:
-    """Fetch footage for all segments (sequential to avoid rate limits)."""
-    paths: list[Path] = []
+) -> list[Path | None]:
+    """Fetch footage for all segments (sequential to avoid rate limits).
+
+    Returns ``None`` for any segment where no clip could be fetched, so the
+    caller can substitute a generated fallback. Never returns an empty Path —
+    ``Path("")`` resolves to the working directory and would break FFmpeg.
+    """
+    paths: list[Path | None] = []
     for seg in segments:
         path = await fetch_footage_for_segment(seg, config, cache_dir)
-        paths.append(path) if path else paths.append(Path(""))  # type: ignore[arg-type]
+        paths.append(path if path and path.is_file() else None)
     return paths
 
 

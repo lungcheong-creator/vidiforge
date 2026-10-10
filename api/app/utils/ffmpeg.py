@@ -56,13 +56,26 @@ def get_ffmpeg_binary() -> str:
     )
 
 
+def _get_ffprobe_binary() -> str:
+    """Locate ffprobe, preferring one sitting next to the resolved ffmpeg."""
+    try:
+        sibling = Path(get_ffmpeg_binary()).parent / "ffprobe"
+        if sibling.is_file() and os.access(sibling, os.X_OK):
+            return str(sibling)
+    except ConfigError:
+        pass
+    return shutil.which("ffprobe") or "ffprobe"
+
+
 def probe_duration(path: str | Path) -> float:
-    """Return the duration (seconds) of a media file via ffprobe."""
-    ffprobe_bin = shutil.which("ffprobe") or "ffprobe"
+    """Return the duration (seconds) of a media file via ffprobe.
+
+    Returns 0.0 when ffprobe is unavailable or the file is unreadable.
+    """
     try:
         out = subprocess.run(
             [
-                ffprobe_bin, "-v", "error",
+                _get_ffprobe_binary(), "-v", "error",
                 "-show_entries", "format=duration",
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 str(path),
@@ -70,17 +83,16 @@ def probe_duration(path: str | Path) -> float:
             capture_output=True, text=True, timeout=30, check=True,
         )
         return float(out.stdout.strip() or "0")
-    except (subprocess.CalledProcessError, ValueError, subprocess.TimeoutExpired):
+    except (subprocess.CalledProcessError, ValueError, subprocess.TimeoutExpired, OSError):
         return 0.0
 
 
 def probe_resolution(path: str | Path) -> tuple[int, int]:
-    """Return (width, height) of a video file via ffprobe."""
-    ffprobe_bin = shutil.which("ffprobe") or "ffprobe"
+    """Return (width, height) of a video file via ffprobe, or (0, 0)."""
     try:
         out = subprocess.run(
             [
-                ffprobe_bin, "-v", "error",
+                _get_ffprobe_binary(), "-v", "error",
                 "-select_streams", "v:0",
                 "-show_entries", "stream=width,height",
                 "-of", "csv=s=x:p=0",
@@ -90,5 +102,5 @@ def probe_resolution(path: str | Path) -> tuple[int, int]:
         )
         w, h = out.stdout.strip().split("x")
         return int(w), int(h)
-    except (subprocess.CalledProcessError, ValueError, subprocess.TimeoutExpired):
+    except (subprocess.CalledProcessError, ValueError, subprocess.TimeoutExpired, OSError):
         return (0, 0)

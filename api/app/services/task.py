@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +22,9 @@ from app.models.exception import TaskError
 from app.models.schema import Script, VideoRequest, VideoTask, TaskStage
 from app.services import bgm, llm, material, subtitle, voice, video
 from app.services.state import TaskState
+
+
+log = logging.getLogger("vidiforge.pipeline")
 
 
 STAGES = [
@@ -79,20 +83,23 @@ async def run_pipeline(task_id: str, request: VideoRequest) -> None:
         # ===== STAGE 3: FOOTAGE =====
         state.update(current_stage="footage", progress=STAGES[2][1])
         footage_dir = work_dir / "footage"
-        # Try API-based footage first; if Pexels key missing, fallback to gradient
+        # Try API-based footage first; missing segments get a generated fallback
         footage_paths = await material.fetch_footage_for_script(
             script.segments, request.material, footage_dir
         )
-        # Fill any missing segments with a generated solid-color fallback
+        # Fill any missing segments with a generated solid-colour fallback clip
         if not all(footage_paths):
-            await _generate_fallback_footage(
-                [s for s, p in zip(script.segments, footage_paths) if not p],
-                footage_dir,
-                request.aspect.value,
-            )
-            rebuilt = []
+            missing = [s for s, p in zip(script.segments, footage_paths) if not (p and p.is_file())]
+            await _generate_fallback_footage(missing, footage_dir, request.aspect.value)
+            rebuilt: list[Path | None] = []
             for s, p in zip(script.segments, footage_paths):
-                rebuilt.append(p if p and p.exists() else footage_dir / f"seg_{s.id:03d}_fallback.mp4")
+                fallback = footage_dir / f"seg_{s.id:03d}_fallback.mp4"
+                if p is not None and p.is_file():
+                    rebuilt.append(p)
+                elif fallback.is_file():
+                    rebuilt.append(fallback)
+                else:
+                    rebuilt.append(None)
             footage_paths = rebuilt
         state.update(progress=STAGES[3][1])
 
@@ -116,6 +123,7 @@ async def run_pipeline(task_id: str, request: VideoRequest) -> None:
             language=request.language.value.split("-")[0],
             video_width=video_width,
             video_height=video_height,
+            voice_id=request.voice.voice_id,
         )
         state.update(progress=STAGES[4][1])
 
@@ -160,31 +168,36 @@ async def _generate_fallback_footage(
     output_dir: Path,
     aspect: str,
 ) -> None:
-    """Generate solid-color (warm gradient) fallback clips using FFmpeg."""
-    width, height = {"9:16": (540, 960), "16:9": (960, 540), "1:1": (540, 540)}.get(aspect, (540, 960))
-    palette = ["#F5EFE6", "#E8DFD2", "#DACBB7", "#C45A3E", "#5B5238", "#A06030"]
+    """Generate solid-colour fallback clips with FFmpeg when no footage is available."""
+    import subprocess
+
+    from app.utils.ffmpeg import get_ffmpeg_binary
+
+    width, height = {"9:16": (540, 960), "16:9": (960, 540), "1:1": (540, 540)}.get(
+        aspect, (540, 960)
+    )
+    palette = ["F5EFE6", "E8DFD2", "DACBB7", "C45A3E", "5B5238", "A06030"]
+    ffmpeg_bin = get_ffmpeg_binary()
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     for i, seg in enumerate(missing_segments):
         out = output_dir / f"seg_{seg.id:03d}_fallback.mp4"
-        if out.exists():
+        if out.is_file():
             continue
-        color = palette[i % len(palette)].lstrip("#")
-        # 5-second fade-through-color clip
+        colour = palette[i % len(palette)]
         args = [
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            ffmpeg_bin, "-y", "-hide_banner", "-loglevel", "error",
             "-f", "lavfi",
-            "-i", f"color=c=0x{color}:s={width}x{height}:d=5:r=24",
-            "-vf", f"fade=t=in:st=0:d=0.5,format=yuv420p",
+            "-i", f"color=c=0x{colour}:s={width}x{height}:d=5:r=24",
+            "-vf", "fade=t=in:st=0:d=0.5,format=yuv420p",
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
             "-t", "5",
             str(out),
         ]
         try:
-            import subprocess
-            subprocess.run(args, check=True, capture_output=True, timeout=30)
-        except Exception:
-            # Soft fail; pipeline will still run but with missing clips
-            pass
+            subprocess.run(args, check=True, capture_output=True, timeout=60)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+            log.warning("Fallback clip generation failed for segment %s: %s", seg.id, e)
 
 
 async def create_task(request: VideoRequest) -> VideoTask:

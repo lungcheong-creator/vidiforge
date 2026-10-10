@@ -31,25 +31,30 @@ class SubtitleCue:
 
 
 async def edge_word_timestamps(
-    text: str, voice_id: str, audio_path: Path,
+    text: str, voice_id: str, audio_path: Path | None = None,
 ) -> list[SubtitleCue]:
-    """Re-run edge-tts with detailed WordBoundary events to extract timestamps."""
+    """Re-run edge-tts with WordBoundary events to extract word timings.
+
+    When ``audio_path`` is given and the file does not yet exist, the synthesised
+    audio is written there. Existing files are never appended to.
+    """
     import edge_tts
 
-    rate = "+0%"
-    communicate = edge_tts.Communicate(text=text, voice=voice_id, rate=rate)
+    communicate = edge_tts.Communicate(text=text, voice=voice_id, rate="+0%")
     cues: list[SubtitleCue] = []
     word_buffer: list[tuple[str, float, float]] = []
+
+    # Only write audio when we were asked to and the file isn't already present.
+    should_write = audio_path is not None and not audio_path.exists()
+    if should_write:
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
 
     async for evt in communicate.stream():
         if evt["type"] == "WordBoundary":
             offset = evt["offset"] / 10_000_000.0  # 100ns → seconds
             duration = evt["duration"] / 10_000_000.0
-            text_part = evt["text"]
-            word_buffer.append((text_part, offset, duration))
-        elif evt["type"] == "audio":
-            # Save audio bytes
-            audio_path.parent.mkdir(parents=True, exist_ok=True)
+            word_buffer.append((evt["text"], offset, duration))
+        elif evt["type"] == "audio" and should_write:
             with open(audio_path, "ab") as f:
                 f.write(evt["data"])
 
@@ -59,10 +64,10 @@ async def edge_word_timestamps(
         chunk = word_buffer[i : i + group_size]
         if not chunk:
             continue
-        text = " ".join(w[0] for w in chunk).strip()
+        cue_text = " ".join(w[0] for w in chunk).strip()
         start = chunk[0][1]
         end = chunk[-1][1] + chunk[-1][2]
-        cues.append(SubtitleCue(start=start, end=end, text=text))
+        cues.append(SubtitleCue(start=start, end=end, text=cue_text))
 
     return cues
 
@@ -198,19 +203,25 @@ async def generate_subtitles_for_segments(
     language: str = "zh",
     video_width: int = 1080,
     video_height: int = 1920,
+    voice_id: str = "zh-CN-XiaoxiaoNeural",
 ) -> tuple[list[SubtitleCue], Path]:
     """Generate one cue list spanning all segments, with absolute timestamps."""
     cues: list[SubtitleCue] = []
     cumulative = 0.0
+    provider = config.provider or SubtitleProvider(settings.subtitle_provider)
+
     for seg, audio_path in zip(segments, voice_paths):
-        provider = config.provider or SubtitleProvider(settings.subtitle_provider)
         if provider == SubtitleProvider.EDGE:
-            seg_cues = await edge_word_timestamps(seg.text, "zh-CN-XiaoxiaoNeural", audio_path)
+            # Pass no audio_path: the clip already exists, we only want timings.
+            seg_cues = await edge_word_timestamps(seg.text, voice_id, None)
         else:
             seg_cues = await whisper_timestamps(audio_path, language=language)
+
         for c in seg_cues:
-            cues.append(SubtitleCue(start=c.start + cumulative, end=c.end + cumulative, text=c.text))
-        # Estimate by audio duration (fallback: 5s per segment)
+            cues.append(
+                SubtitleCue(start=c.start + cumulative, end=c.end + cumulative, text=c.text)
+            )
+
         from app.utils.ffmpeg import probe_duration
         d = probe_duration(audio_path)
         cumulative += d if d > 0 else 5.0
