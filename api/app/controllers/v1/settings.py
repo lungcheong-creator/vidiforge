@@ -66,7 +66,7 @@ async def save_key(body: ApiKeySave, _: VerifiedToken) -> ApiKeyEntry:
 @router.post("/keys/bulk", summary="Save multiple API keys at once")
 async def save_keys_bulk(body: ApiKeyBulkSave, _: VerifiedToken) -> dict:
     """Save multiple keys in one request."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     saved = []
     for provider, value in body.keys.items():
         if not value.strip():
