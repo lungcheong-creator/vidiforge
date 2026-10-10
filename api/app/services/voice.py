@@ -86,16 +86,16 @@ async def synthesize_segment(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"seg_{segment.id:03d}_{uuid.uuid4().hex[:8]}.mp3"
 
-    if config.voice_provider == VoiceProvider.EDGE:
+    if config.provider == VoiceProvider.EDGE:
         await synthesize_edge(segment.text, config.voice_id, config.speed, config.pitch, output_path)
-    elif config.voice_provider == VoiceProvider.AZURE:
+    elif config.provider == VoiceProvider.AZURE:
         await synthesize_azure(segment.text, config.voice_id, output_path)
-    elif config.voice_provider == VoiceProvider.ELEVENLABS:
+    elif config.provider == VoiceProvider.ELEVENLABS:
         await synthesize_elevenlabs(segment.text, config.voice_id, output_path)
-    elif config.voice_provider == VoiceProvider.SILICONFLOW:
+    elif config.provider == VoiceProvider.SILICONFLOW:
         await synthesize_siliconflow(segment.text, config.voice_id, output_path)
     else:
-        raise ConfigError(f"Unsupported voice provider: {config.voice_provider}")
+        raise ConfigError(f"Unsupported voice provider: {config.provider}")
 
     return output_path
 
